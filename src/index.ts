@@ -172,8 +172,124 @@ async function listLabels(account?: string) {
   return results;
 }
 
+function buildRawMessage(params: {
+  to: string;
+  subject: string;
+  body: string;
+  cc?: string;
+  bcc?: string;
+}): string {
+  const headers = [`To: ${params.to}`];
+  if (params.cc) headers.push(`Cc: ${params.cc}`);
+  if (params.bcc) headers.push(`Bcc: ${params.bcc}`);
+  headers.push(`Subject: ${params.subject}`);
+  headers.push(`MIME-Version: 1.0`);
+  headers.push(`Content-Type: text/plain; charset="UTF-8"`);
+
+  const raw = `${headers.join("\r\n")}\r\n\r\n${params.body}`;
+  return Buffer.from(raw, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+async function createDraft(
+  account: string,
+  to: string,
+  subject: string,
+  body: string,
+  cc?: string,
+  bcc?: string,
+  threadId?: string
+) {
+  if (!account || account === "all") {
+    throw new Error("account is required for create_draft — pick one from list_accounts");
+  }
+
+  const tokenFile = resolveTokenFiles(account)[0];
+  const email = accountFromPath(tokenFile);
+  const gmail = google.gmail({ version: "v1", auth: getClient(tokenFile) });
+
+  const raw = buildRawMessage({ to, subject, body, cc, bcc });
+  const res = await gmail.users.drafts.create({
+    userId: "me",
+    requestBody: { message: { raw, threadId } },
+  });
+
+  return {
+    draftId: res.data.id,
+    messageId: res.data.message?.id,
+    threadId: res.data.message?.threadId,
+    account: email,
+  };
+}
+
+async function listDrafts(maxResults: number, account?: string) {
+  const tokenFiles = resolveTokenFiles(account);
+  const results: any[] = [];
+
+  for (const tokenFile of tokenFiles) {
+    const email = accountFromPath(tokenFile);
+    const gmail = google.gmail({ version: "v1", auth: getClient(tokenFile) });
+
+    try {
+      const listRes = await gmail.users.drafts.list({ userId: "me", maxResults });
+      const drafts = listRes.data.drafts ?? [];
+
+      const detailed = await Promise.all(
+        drafts.map(async (d) => {
+          const draftRes = await gmail.users.drafts.get({ userId: "me", id: d.id! });
+          const h = draftRes.data.message?.payload?.headers ?? [];
+          return {
+            draftId: d.id,
+            messageId: draftRes.data.message?.id,
+            threadId: draftRes.data.message?.threadId,
+            subject: extractHeader(h, "Subject"),
+            to: extractHeader(h, "To"),
+            snippet: draftRes.data.message?.snippet,
+          };
+        })
+      );
+
+      results.push({ account: email, drafts: detailed });
+    } catch (err: any) {
+      results.push({ account: email, error: err.message });
+    }
+  }
+
+  return results;
+}
+
+async function getDraft(draftId: string, account?: string) {
+  const tokenFiles = resolveTokenFiles(account);
+
+  for (const tokenFile of tokenFiles) {
+    const email = accountFromPath(tokenFile);
+    const gmail = google.gmail({ version: "v1", auth: getClient(tokenFile) });
+
+    try {
+      const res = await gmail.users.drafts.get({ userId: "me", id: draftId });
+      const h = res.data.message?.payload?.headers ?? [];
+      return {
+        draftId: res.data.id,
+        messageId: res.data.message?.id,
+        threadId: res.data.message?.threadId,
+        subject: extractHeader(h, "Subject"),
+        to: extractHeader(h, "To"),
+        body: extractBody(res.data.message?.payload),
+        account: email,
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  throw new Error(`Draft ${draftId} not found in any connected account`);
+}
+
 const server = new Server(
-  { name: "gmail-mcp", version: "1.0.0" },
+  { name: "gmail-mcp", version: "1.1.0" },
   { capabilities: { tools: {} } }
 );
 
@@ -236,6 +352,59 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: "List all Gmail accounts that have an authorized token saved.",
       inputSchema: { type: "object", properties: {} },
     },
+    {
+      name: "create_draft",
+      description: "Create a new Gmail draft in a specific account. Does not send it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          account: { type: "string", description: "Email address to create the draft in. Required." },
+          to: { type: "string", description: "Recipient email address(es), comma-separated." },
+          subject: { type: "string", description: "Subject line." },
+          body: { type: "string", description: "Plain-text message body." },
+          cc: { type: "string", description: "Cc email address(es), comma-separated." },
+          bcc: { type: "string", description: "Bcc email address(es), comma-separated." },
+          threadId: {
+            type: "string",
+            description: "Gmail thread ID to attach this draft to as a reply. Omit for a new thread.",
+          },
+        },
+        required: ["account", "to", "subject", "body"],
+      },
+    },
+    {
+      name: "list_drafts",
+      description: "List Gmail drafts for one or all connected accounts.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          maxResults: {
+            type: "number",
+            description: "Max drafts per account (default 50, max 100)",
+            default: 50,
+          },
+          account: {
+            type: "string",
+            description: "Email address, or 'all' for all accounts. Omit for all.",
+          },
+        },
+      },
+    },
+    {
+      name: "get_draft",
+      description: "Fetch the full body and headers of a Gmail draft by ID.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          draftId: { type: "string", description: "Gmail draft ID" },
+          account: {
+            type: "string",
+            description: "Email address that owns this draft. Omit to try all accounts.",
+          },
+        },
+        required: ["draftId"],
+      },
+    },
   ],
 }));
 
@@ -260,6 +429,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       result = await listLabels(args!.account as string | undefined);
     } else if (name === "list_accounts") {
       result = { accounts: listAccounts() };
+    } else if (name === "create_draft") {
+      result = await createDraft(
+        args!.account as string,
+        args!.to as string,
+        args!.subject as string,
+        args!.body as string,
+        args!.cc as string | undefined,
+        args!.bcc as string | undefined,
+        args!.threadId as string | undefined
+      );
+    } else if (name === "list_drafts") {
+      result = await listDrafts(
+        (args!.maxResults as number) ?? 50,
+        args!.account as string | undefined
+      );
+    } else if (name === "get_draft") {
+      result = await getDraft(
+        args!.draftId as string,
+        args!.account as string | undefined
+      );
     } else {
       throw new Error(`Unknown tool: ${name}`);
     }

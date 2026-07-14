@@ -1,6 +1,6 @@
 # gmail-mcp
 
-A read-only, multi-account Gmail [MCP](https://modelcontextprotocol.io) server for Claude Code. Lets Claude search threads, read messages, and list labels across one or more Gmail accounts you've authorized, over stdio.
+A multi-account Gmail [MCP](https://modelcontextprotocol.io) server for Claude Code. Lets Claude search threads, read messages, list labels, and create drafts across one or more Gmail accounts you've authorized, over stdio.
 
 ## Tools
 
@@ -10,8 +10,11 @@ A read-only, multi-account Gmail [MCP](https://modelcontextprotocol.io) server f
 | `get_message` | Fetch the full body and headers of a message by ID. |
 | `list_labels` | List Gmail labels for one or all connected accounts. |
 | `list_accounts` | List all Gmail accounts that currently have an authorized token saved. |
+| `create_draft` | Create a new draft (to, subject, body, optional cc/bcc/threadId) in a specific account. Never sends it. |
+| `list_drafts` | List drafts for one or all connected accounts. |
+| `get_draft` | Fetch the full body and headers of a draft by ID. |
 
-All access is read-only (`gmail.readonly` scope) — this server cannot send, delete, or modify anything in Gmail.
+Scopes: `gmail.readonly` for all read operations, plus `gmail.compose` for draft creation. This server cannot edit or delete existing drafts, and it cannot send mail — creating a draft is as far as it goes.
 
 ## Setup
 
@@ -38,6 +41,8 @@ npm run auth -- youraccount@gmail.com
 ```
 
 This opens a Google consent screen in your browser and, on approval, saves the resulting token to `tokens/youraccount@gmail.com.json`. Repeat for each account you want Claude to have access to.
+
+If an account was authorized before draft support was added (scopes changed from `gmail.readonly` only to `gmail.readonly` + `gmail.compose`), re-run `npm run auth -- <email>` for it — the old token won't have permission to create drafts and Gmail API calls will fail with an insufficient-scope error.
 
 ### 4. Register the server with Claude Code
 

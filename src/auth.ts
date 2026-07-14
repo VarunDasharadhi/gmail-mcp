@@ -8,7 +8,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const CREDENTIALS_PATH = join(ROOT, "credentials.json");
 const TOKENS_DIR = join(ROOT, "tokens");
-const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
+const SCOPES = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.compose",
+];
 const PORT = 9427;
 const REDIRECT_URI = `http://localhost:${PORT}`;
 

@@ -4,3 +4,6 @@ dist/
 # OAuth credentials and tokens -- never commit
 credentials.json
 tokens/
+
+# Personal working notes -- not part of the public repo
+HANDOFF.md
