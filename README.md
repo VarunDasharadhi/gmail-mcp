@@ -46,6 +46,8 @@ npm run auth -- youraccount@gmail.com
 
 This opens a Google consent screen in your browser and, on approval, saves the resulting token to `tokens/youraccount@gmail.com.json`. Repeat for each account you want Claude to have access to.
 
+Before re-authorizing any account for calendar access, confirm two things in the Google Cloud project behind `credentials.json`: the **Calendar API is enabled**, and `calendar.readonly` is **registered as a scope on the OAuth consent screen**. Without both, running `npm run auth` will not actually grant working calendar access: a missing API enablement surfaces as a 403 `accessNotConfigured` on every call, and a missing consent-screen scope can make consent fail or silently not grant the scope.
+
 If an account was authorized before draft support or calendar support was added, re-run `npm run auth -- <email>` for it: the old token won't have permission for the newer scope and API calls will fail with an insufficient-scope error (calendar tools report this as a clear, actionable message naming the re-auth command; older Gmail draft calls fail the same way).
 
 ### 4. Register the server with Claude Code

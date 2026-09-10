@@ -26,12 +26,17 @@ pattern (`getClient`), reusing it for `google.calendar({version: "v3", auth})` r
 duplicating the OAuth setup. `SCOPES` in `src/auth.ts` gained
 `https://www.googleapis.com/auth/calendar.readonly`; the two Gmail scopes are unchanged.
 
-**None of the 4 existing tokens (`tokens/*.json`) carry the new calendar scope yet.** Every
-calendar call on every account will fail until Varun re-consents each one:
-`npm run auth -- <email>` for each of the 4 accounts. Both calendar tools detect this
-(403 insufficient-scope, or 401) and return a per-account error naming that exact command rather
-than a bare 401; this was verified against all 4 live accounts on 2026-09-10 (see
-`DECISIONS.md`).
+**None of the 4 existing tokens (`tokens/*.json`) carry the new calendar scope yet.** Before
+re-consenting any account, confirm in the Google Cloud project behind `credentials.json` that the
+Calendar API is enabled and that `calendar.readonly` is registered on the OAuth consent screen's
+scope list; without both, `npm run auth -- <email>` will not actually grant working calendar
+access (a missing API enablement surfaces as a 403 `accessNotConfigured` on every call; a missing
+consent-screen scope can make consent fail or silently not grant the scope). Once that is
+confirmed, every calendar call on every account will fail until Varun re-consents each one:
+`npm run auth -- <email>` for each of the 4 accounts. Both calendar tools detect a missing scope
+(403 insufficient-scope, or 401) and a revoked or expired token (`invalid_grant`) and return a
+per-account error naming that exact command rather than a bare 401 or a raw `invalid_grant`; this
+was verified against all 4 live accounts on 2026-09-10 (see `DECISIONS.md`).
 
 Per the last real `HANDOFF.md` entry (2026-07-14, before an earlier task tombstoned that file):
 draft creation (`create_draft`/`list_drafts`/`get_draft`) shipped, all 4 accounts were
@@ -45,10 +50,5 @@ script exists.
 Security: `tokens/*.json` (4 real OAuth tokens) and `credentials.json` are gitignored and were
 confirmed, via a full `git log --all` history search across both commits, to have never been
 tracked on any branch. See AGENTS.md's Security section for the hard rules on these files.
-
-A `package-lock.json` version-field drift (`1.0.0` in the last commit's lockfile vs `1.1.0` in
-`package.json` and the working-tree lockfile, dated 2026-08-11) rode along in this task's commit
-rather than being handled separately, per explicit coordinator sign-off that it is routine `npm
-install` churn, not real uncommitted work.
 
 Last verified: 2026-09-10

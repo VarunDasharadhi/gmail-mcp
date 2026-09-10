@@ -276,6 +276,9 @@ function calendarErrorMessage(err: any, email: string): string {
   if (status === 401) {
     return `${email}'s token is invalid or expired for calendar access. Run: npm run auth -- ${email} to re-authorize.`;
   }
+  if (/invalid_grant/i.test(rawMessage)) {
+    return `${email}'s token is invalid or expired for calendar access. Run: npm run auth -- ${email} to re-authorize.`;
+  }
   return rawMessage;
 }
 
