@@ -261,6 +261,117 @@ async function listDrafts(maxResults: number, account?: string) {
   return results;
 }
 
+function calendarErrorMessage(err: any, email: string): string {
+  const status = err?.code ?? err?.response?.status;
+  const reason =
+    err?.errors?.[0]?.reason ?? err?.response?.data?.error?.errors?.[0]?.reason;
+  const rawMessage = err?.message ?? String(err);
+
+  if (
+    status === 403 &&
+    (reason === "insufficientPermissions" || /insufficient/i.test(rawMessage))
+  ) {
+    return `${email}'s token does not have calendar access yet (missing calendar.readonly scope). Run: npm run auth -- ${email}`;
+  }
+  if (status === 401) {
+    return `${email}'s token is invalid or expired for calendar access. Run: npm run auth -- ${email} to re-authorize.`;
+  }
+  return rawMessage;
+}
+
+function formatEvent(event: any) {
+  const start = event.start?.dateTime ?? event.start?.date ?? "";
+  const end = event.end?.dateTime ?? event.end?.date ?? "";
+  const allDay = Boolean(event.start?.date) && !event.start?.dateTime;
+
+  return {
+    id: event.id,
+    summary: event.summary ?? "(no title)",
+    start,
+    end,
+    location: event.location ?? "",
+    allDay,
+    attendeeCount: (event.attendees ?? []).length,
+  };
+}
+
+async function listEvents(params: {
+  account?: string;
+  timeMin?: string;
+  timeMax?: string;
+  maxResults?: number;
+  calendarId?: string;
+}) {
+  const calendarId = params.calendarId ?? "primary";
+  const timeMin = params.timeMin ?? new Date().toISOString();
+  const timeMax = params.timeMax ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const maxResults = params.maxResults ?? 50;
+
+  const tokenFiles = resolveTokenFiles(params.account);
+  const results: any[] = [];
+
+  for (const tokenFile of tokenFiles) {
+    const email = accountFromPath(tokenFile);
+    const calendar = google.calendar({ version: "v3", auth: getClient(tokenFile) });
+
+    try {
+      const res = await calendar.events.list({
+        calendarId,
+        timeMin,
+        timeMax,
+        maxResults,
+        singleEvents: true,
+        orderBy: "startTime",
+      });
+      results.push({
+        account: email,
+        events: (res.data.items ?? []).map(formatEvent),
+      });
+    } catch (err: any) {
+      results.push({ account: email, error: calendarErrorMessage(err, email) });
+    }
+  }
+
+  return results;
+}
+
+async function searchEvents(params: {
+  query: string;
+  account?: string;
+  timeMin?: string;
+  timeMax?: string;
+  maxResults?: number;
+}) {
+  const maxResults = params.maxResults ?? 50;
+  const tokenFiles = resolveTokenFiles(params.account);
+  const results: any[] = [];
+
+  for (const tokenFile of tokenFiles) {
+    const email = accountFromPath(tokenFile);
+    const calendar = google.calendar({ version: "v3", auth: getClient(tokenFile) });
+
+    try {
+      const res = await calendar.events.list({
+        calendarId: "primary",
+        q: params.query,
+        timeMin: params.timeMin,
+        timeMax: params.timeMax,
+        maxResults,
+        singleEvents: true,
+        orderBy: "startTime",
+      });
+      results.push({
+        account: email,
+        events: (res.data.items ?? []).map(formatEvent),
+      });
+    } catch (err: any) {
+      results.push({ account: email, error: calendarErrorMessage(err, email) });
+    }
+  }
+
+  return results;
+}
+
 async function getDraft(draftId: string, account?: string) {
   const tokenFiles = resolveTokenFiles(account);
 
@@ -405,6 +516,70 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["draftId"],
       },
     },
+    {
+      name: "list_events",
+      description:
+        "List calendar events across one or all connected accounts, ordered by start time. Expands recurring events into individual instances. Defaults to the next 7 days.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          account: {
+            type: "string",
+            description: "Email address to list events for, or 'all' for all connected accounts. Omit for all.",
+          },
+          timeMin: {
+            type: "string",
+            description: "ISO 8601 start of the time range. Defaults to now.",
+          },
+          timeMax: {
+            type: "string",
+            description: "ISO 8601 end of the time range. Defaults to 7 days from now.",
+          },
+          maxResults: {
+            type: "number",
+            description: "Max events per account (default 50, max 100)",
+            default: 50,
+          },
+          calendarId: {
+            type: "string",
+            description: "Calendar ID to query. Defaults to 'primary'.",
+            default: "primary",
+          },
+        },
+      },
+    },
+    {
+      name: "search_events",
+      description:
+        "Search calendar events by text query across one or all connected accounts, ordered by start time. Expands recurring events into individual instances.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Free-text search query, matched against event summary, description, location, and attendees.",
+          },
+          account: {
+            type: "string",
+            description: "Email address to search, or 'all' for all connected accounts. Omit for all.",
+          },
+          timeMin: {
+            type: "string",
+            description: "ISO 8601 start of the time range. Omit for no lower bound.",
+          },
+          timeMax: {
+            type: "string",
+            description: "ISO 8601 end of the time range. Omit for no upper bound.",
+          },
+          maxResults: {
+            type: "number",
+            description: "Max events per account (default 50, max 100)",
+            default: 50,
+          },
+        },
+        required: ["query"],
+      },
+    },
   ],
 }));
 
@@ -449,6 +624,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         args!.draftId as string,
         args!.account as string | undefined
       );
+    } else if (name === "list_events") {
+      result = await listEvents({
+        account: args!.account as string | undefined,
+        timeMin: args!.timeMin as string | undefined,
+        timeMax: args!.timeMax as string | undefined,
+        maxResults: args!.maxResults as number | undefined,
+        calendarId: args!.calendarId as string | undefined,
+      });
+    } else if (name === "search_events") {
+      result = await searchEvents({
+        query: args!.query as string,
+        account: args!.account as string | undefined,
+        timeMin: args!.timeMin as string | undefined,
+        timeMax: args!.timeMax as string | undefined,
+        maxResults: args!.maxResults as number | undefined,
+      });
     } else {
       throw new Error(`Unknown tool: ${name}`);
     }

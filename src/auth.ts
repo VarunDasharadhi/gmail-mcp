@@ -11,6 +11,7 @@ const TOKENS_DIR = join(ROOT, "tokens");
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.compose",
+  "https://www.googleapis.com/auth/calendar.readonly",
 ];
 const PORT = 9427;
 const REDIRECT_URI = `http://localhost:${PORT}`;

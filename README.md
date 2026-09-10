@@ -13,8 +13,12 @@ A multi-account Gmail [MCP](https://modelcontextprotocol.io) server for Claude C
 | `create_draft` | Create a new draft (to, subject, body, optional cc/bcc/threadId) in a specific account. Never sends it. |
 | `list_drafts` | List drafts for one or all connected accounts. |
 | `get_draft` | Fetch the full body and headers of a draft by ID. |
+| `list_events` | List calendar events (default: next 7 days) across one or all connected accounts, expanding recurring events. Returns id, summary, start, end, location, all-day flag, and attendee count per event. |
+| `search_events` | Search calendar events by free-text query across one or all connected accounts. Same output shape as `list_events`. |
 
-Scopes: `gmail.readonly` for all read operations, plus `gmail.compose` for draft creation. This server cannot edit or delete existing drafts, and it cannot send mail — creating a draft is as far as it goes.
+Scopes: `gmail.readonly` for all Gmail read operations, `gmail.compose` for draft creation, and `calendar.readonly` for calendar reads. This server cannot edit or delete existing drafts, cannot send mail, and cannot create, update, or delete calendar events, it is read-only on the calendar side.
+
+Accounts authorized before calendar support was added need to re-consent (see step 3 below) before `list_events` or `search_events` will work for them; until then, both tools return a clear per-account error naming the exact `npm run auth -- <email>` command to fix it, instead of a bare 401.
 
 ## Setup
 
@@ -42,7 +46,7 @@ npm run auth -- youraccount@gmail.com
 
 This opens a Google consent screen in your browser and, on approval, saves the resulting token to `tokens/youraccount@gmail.com.json`. Repeat for each account you want Claude to have access to.
 
-If an account was authorized before draft support was added (scopes changed from `gmail.readonly` only to `gmail.readonly` + `gmail.compose`), re-run `npm run auth -- <email>` for it — the old token won't have permission to create drafts and Gmail API calls will fail with an insufficient-scope error.
+If an account was authorized before draft support or calendar support was added, re-run `npm run auth -- <email>` for it: the old token won't have permission for the newer scope and API calls will fail with an insufficient-scope error (calendar tools report this as a clear, actionable message naming the re-auth command; older Gmail draft calls fail the same way).
 
 ### 4. Register the server with Claude Code
 
@@ -71,7 +75,8 @@ npm start        # run the compiled server
 ```
 src/
   auth.ts    # one-off OAuth flow: authorizes an account and saves its token
-  index.ts   # MCP server: exposes search_threads, get_message, list_labels, list_accounts
+  index.ts   # MCP server: exposes search_threads, get_message, list_labels, list_accounts,
+             # create_draft, list_drafts, get_draft, list_events, search_events
 ```
 
 Tokens are stored per account in `tokens/<email>.json` and are loaded on demand from `TOKENS_DIR` at request time, so accounts can be added or removed without restarting the server.
