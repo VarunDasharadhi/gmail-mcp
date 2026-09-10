@@ -35,7 +35,9 @@ consent-screen scope can make consent fail or silently not grant the scope). Onc
 confirmed, every calendar call on every account will fail until Varun re-consents each one:
 `npm run auth -- <email>` for each of the 4 accounts. Both calendar tools detect a missing scope
 (403 insufficient-scope, or 401) and return a per-account error naming that exact command rather
-than a bare 401; this was verified against all 4 live accounts on 2026-09-10 (see `DECISIONS.md`).
+than a bare 401; this was verified against all 4 live accounts on 2026-09-10. No written evidence of
+that run survives in this repo: `DECISIONS.md`'s 2026-09-10 entry records the decision, not the
+verification output.
 They also map a revoked or expired token (`invalid_grant`) to the same actionable message, but
 that branch has only been verified against a synthetic throwaway harness with fabricated error
 shapes, not against any live account or a real revoked token.
