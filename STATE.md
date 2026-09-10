@@ -34,9 +34,11 @@ access (a missing API enablement surfaces as a 403 `accessNotConfigured` on ever
 consent-screen scope can make consent fail or silently not grant the scope). Once that is
 confirmed, every calendar call on every account will fail until Varun re-consents each one:
 `npm run auth -- <email>` for each of the 4 accounts. Both calendar tools detect a missing scope
-(403 insufficient-scope, or 401) and a revoked or expired token (`invalid_grant`) and return a
-per-account error naming that exact command rather than a bare 401 or a raw `invalid_grant`; this
-was verified against all 4 live accounts on 2026-09-10 (see `DECISIONS.md`).
+(403 insufficient-scope, or 401) and return a per-account error naming that exact command rather
+than a bare 401; this was verified against all 4 live accounts on 2026-09-10 (see `DECISIONS.md`).
+They also map a revoked or expired token (`invalid_grant`) to the same actionable message, but
+that branch has only been verified against a synthetic throwaway harness with fabricated error
+shapes, not against any live account or a real revoked token.
 
 Per the last real `HANDOFF.md` entry (2026-07-14, before an earlier task tombstoned that file):
 draft creation (`create_draft`/`list_drafts`/`get_draft`) shipped, all 4 accounts were
