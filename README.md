@@ -10,7 +10,7 @@ A multi-account Gmail [MCP](https://modelcontextprotocol.io) server for Claude C
 | `get_message` | Fetch the full body and headers of a message by ID. |
 | `list_labels` | List Gmail labels for one or all connected accounts. |
 | `list_accounts` | List all Gmail accounts that currently have an authorized token saved. |
-| `create_draft` | Create a new draft (to, subject, body, optional cc/bcc/threadId) in a specific account. Never sends it. |
+| `create_draft` | Create a new draft (to, subject, body, optional cc/bcc/threadId/from) in a specific account. Never sends it. |
 | `list_drafts` | List drafts for one or all connected accounts. |
 | `get_draft` | Fetch the full body and headers of a draft by ID. |
 | `list_events` | List calendar events (default: next 7 days) across one or all connected accounts, expanding recurring events. Returns id, summary, start, end, location, all-day flag, and attendee count per event. |

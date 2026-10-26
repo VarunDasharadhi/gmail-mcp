@@ -178,8 +178,11 @@ function buildRawMessage(params: {
   body: string;
   cc?: string;
   bcc?: string;
+  from?: string;
 }): string {
-  const headers = [`To: ${params.to}`];
+  const headers: string[] = [];
+  if (params.from) headers.push(`From: ${params.from}`);
+  headers.push(`To: ${params.to}`);
   if (params.cc) headers.push(`Cc: ${params.cc}`);
   if (params.bcc) headers.push(`Bcc: ${params.bcc}`);
   headers.push(`Subject: ${params.subject}`);
@@ -201,17 +204,32 @@ async function createDraft(
   body: string,
   cc?: string,
   bcc?: string,
-  threadId?: string
+  threadId?: string,
+  from?: string
 ) {
   if (!account || account === "all") {
     throw new Error("account is required for create_draft — pick one from list_accounts");
+  }
+
+  let validatedFrom: string | undefined = from?.trim();
+  if (validatedFrom === "") validatedFrom = undefined;
+  if (validatedFrom !== undefined) {
+    if (validatedFrom.includes("\r") || validatedFrom.includes("\n")) {
+      throw new Error("from must be a single email address, without line breaks");
+    }
+    const fromRegex = /^([^<>]+ <[^<>\s]+@[^<>\s]+\.[^<>\s]+>|[^<>\s]+@[^<>\s]+\.[^<>\s]+)$/;
+    if (!fromRegex.test(validatedFrom)) {
+      throw new Error(
+        `Invalid from address "${validatedFrom}". Use a bare address like account-5@example.com or a named address like Example Co <account-5@example.com>.`
+      );
+    }
   }
 
   const tokenFile = resolveTokenFiles(account)[0];
   const email = accountFromPath(tokenFile);
   const gmail = google.gmail({ version: "v1", auth: getClient(tokenFile) });
 
-  const raw = buildRawMessage({ to, subject, body, cc, bcc });
+  const raw = buildRawMessage({ to, subject, body, cc, bcc, from: validatedFrom });
   const res = await gmail.users.drafts.create({
     userId: "me",
     requestBody: { message: { raw, threadId } },
@@ -222,6 +240,7 @@ async function createDraft(
     messageId: res.data.message?.id,
     threadId: res.data.message?.threadId,
     account: email,
+    from: validatedFrom ?? null,
   };
 }
 
@@ -482,6 +501,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "Gmail thread ID to attach this draft to as a reply. Omit for a new thread.",
           },
+          from: {
+            type: "string",
+            description:
+              "Optional From address, e.g. account-5@example.com or Example Co <account-5@example.com>. It must already be set up under Gmail's Send mail as for this account; if it is not, Gmail uses the account's default address instead.",
+          },
         },
         required: ["account", "to", "subject", "body"],
       },
@@ -615,7 +639,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         args!.body as string,
         args!.cc as string | undefined,
         args!.bcc as string | undefined,
-        args!.threadId as string | undefined
+        args!.threadId as string | undefined,
+        args!.from as string | undefined
       );
     } else if (name === "list_drafts") {
       result = await listDrafts(
