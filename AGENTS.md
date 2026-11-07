@@ -37,9 +37,9 @@ routing around it.
 
 ## Repo boundaries
 
-### Security: OAuth tokens for 4 real Gmail accounts
+### Security: OAuth tokens for your configured accounts
 
-`tokens/*.json` holds real, live OAuth tokens for 4 real Gmail accounts (`account-1@example.com`, `account-2@example.com`, `account-3@example.com`, `account-4@example.com`). `credentials.json` at repo root holds the OAuth client credentials. Both are gitignored; neither has ever been tracked in this repo's git history, on any branch, confirmed by a full history search.
+`tokens/*.json` holds the OAuth tokens for whichever Gmail accounts you have authorized locally (the owner's own list lives in the gitignored `docs/accounts.local.md`). `credentials.json` at repo root holds the OAuth client credentials. Both are gitignored; neither has ever been tracked in this repo's git history, on any branch, confirmed by a full history search.
 
 Never commit, print, cat, or otherwise output the contents of `tokens/*.json` or `credentials.json`. Never paste their content into a prompt, a file, a commit message, or any other channel a model reads. If you need to inspect whether a token file exists or what accounts are authorized, check the filename only (`ls tokens/`), never its content. Before any commit, confirm `.gitignore` still excludes both `tokens/` and `credentials.json`, and that `git status` shows neither as staged.
 
