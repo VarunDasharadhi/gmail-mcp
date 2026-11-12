@@ -10,11 +10,12 @@ A multi-account Gmail [MCP](https://modelcontextprotocol.io) server for Claude C
 | `get_message` | Fetch the full body and headers of a message by ID. |
 | `list_labels` | List Gmail labels for one or all connected accounts. |
 | `list_accounts` | List all Gmail accounts that currently have an authorized token saved. |
-| `create_draft` | Create a new draft (to, subject, body, optional cc/bcc/threadId) in a specific account. Never sends it. |
+| `create_draft` | Create a new draft (to, subject, body or html, optional from/signature/cc/bcc/threadId) in a specific account. Always HTML with an unwrapped plain-text copy, so Gmail never cuts lines; `from` must be a send-as address, and its saved Gmail signature is added. Never sends it. |
+| `update_draft` | Replace an existing draft's content in place, same options as `create_draft`. Never sends it. |
 | `list_drafts` | List drafts for one or all connected accounts. |
 | `get_draft` | Fetch the full body and headers of a draft by ID. |
 
-Scopes: `gmail.readonly` for all read operations, plus `gmail.compose` for draft creation. This server cannot edit or delete existing drafts, and it cannot send mail — creating a draft is as far as it goes.
+Scopes: `gmail.readonly` for all read operations, plus `gmail.compose` for draft creation. This server can replace a draft's content (`update_draft`) but never deletes drafts, and it cannot send mail. Creating or updating a draft is as far as it goes.
 
 ## Setup
 

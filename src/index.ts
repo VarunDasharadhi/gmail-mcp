@@ -9,6 +9,7 @@ import { OAuth2Client } from "google-auth-library";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { buildMime, composeHtml, htmlToText, pickReplyHeaders, pickSender, textToHtml, toRaw } from "./compose.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -172,51 +173,89 @@ async function listLabels(account?: string) {
   return results;
 }
 
-function buildRawMessage(params: {
+interface DraftInput {
   to: string;
   subject: string;
-  body: string;
+  body?: string;
+  html?: string;
+  from?: string;
+  signature?: boolean;
   cc?: string;
   bcc?: string;
-}): string {
-  const headers = [`To: ${params.to}`];
-  if (params.cc) headers.push(`Cc: ${params.cc}`);
-  if (params.bcc) headers.push(`Bcc: ${params.bcc}`);
-  headers.push(`Subject: ${params.subject}`);
-  headers.push(`MIME-Version: 1.0`);
-  headers.push(`Content-Type: text/plain; charset="UTF-8"`);
-
-  const raw = `${headers.join("\r\n")}\r\n\r\n${params.body}`;
-  return Buffer.from(raw, "utf8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  threadId?: string;
 }
 
-async function createDraft(
-  account: string,
-  to: string,
-  subject: string,
-  body: string,
-  cc?: string,
-  bcc?: string,
-  threadId?: string
-) {
-  if (!account || account === "all") {
-    throw new Error("account is required for create_draft — pick one from list_accounts");
+// Pick the From from the account's own send-as list, so Gmail sends it through the right mail
+// server, and take that address's saved Gmail signature. Unknown addresses are refused.
+async function resolveSender(gmail: any, from?: string) {
+  let list;
+  try {
+    list = (await gmail.users.settings.sendAs.list({ userId: "me" })).data.sendAs ?? [];
+  } catch (err: any) {
+    throw new Error(`Could not read this account's send-as addresses, so no draft was made: ${err.message}`);
   }
+  return pickSender(list, from);
+}
 
+// For a reply, point In-Reply-To and References at the newest sent message in the thread, so the
+// recipient's mail program threads it too, not just Gmail.
+async function replyHeaders(gmail: any, threadId?: string) {
+  if (!threadId) return {};
+  const t = await gmail.users.threads.get({
+    userId: "me",
+    id: threadId,
+    format: "metadata",
+    metadataHeaders: ["Message-ID", "References"],
+  });
+  return pickReplyHeaders(t.data.messages ?? []);
+}
+
+async function buildDraftRaw(gmail: any, d: DraftInput): Promise<string> {
+  if (!d.body && !d.html) throw new Error("Give body (plain text) or html.");
+  const sender = await resolveSender(gmail, d.from);
+  const bodyHtml = d.html ?? textToHtml(d.body!);
+  const useSig = d.signature !== false && !!sender.signature;
+  const html = composeHtml(bodyHtml, useSig ? sender.signature : undefined);
+  const text = htmlToText(html);
+  const reply = await replyHeaders(gmail, d.threadId);
+  return toRaw(
+    buildMime({ from: sender.header, to: d.to, cc: d.cc, bcc: d.bcc, subject: d.subject, html, text, ...reply })
+  );
+}
+
+function gmailFor(account: string) {
+  if (!account || account === "all") {
+    throw new Error("account is required for drafts — pick one from list_accounts");
+  }
   const tokenFile = resolveTokenFiles(account)[0];
-  const email = accountFromPath(tokenFile);
-  const gmail = google.gmail({ version: "v1", auth: getClient(tokenFile) });
+  return { email: accountFromPath(tokenFile), gmail: google.gmail({ version: "v1", auth: getClient(tokenFile) }) };
+}
 
-  const raw = buildRawMessage({ to, subject, body, cc, bcc });
+async function createDraft(account: string, d: DraftInput) {
+  const { email, gmail } = gmailFor(account);
+  const raw = await buildDraftRaw(gmail, d);
   const res = await gmail.users.drafts.create({
     userId: "me",
-    requestBody: { message: { raw, threadId } },
+    requestBody: { message: { raw, threadId: d.threadId } },
   });
+  return {
+    draftId: res.data.id,
+    messageId: res.data.message?.id,
+    threadId: res.data.message?.threadId,
+    account: email,
+  };
+}
 
+// Replace an existing draft's content in place (same draft id). Never sends.
+async function updateDraft(account: string, draftId: string, d: DraftInput) {
+  if (!draftId) throw new Error("draftId is required for update_draft.");
+  const { email, gmail } = gmailFor(account);
+  const raw = await buildDraftRaw(gmail, d);
+  const res = await gmail.users.drafts.update({
+    userId: "me",
+    id: draftId,
+    requestBody: { id: draftId, message: { raw, threadId: d.threadId } },
+  });
   return {
     draftId: res.data.id,
     messageId: res.data.message?.id,
@@ -354,14 +393,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "create_draft",
-      description: "Create a new Gmail draft in a specific account. Does not send it.",
+      description:
+        "Create a Gmail draft (formatted HTML, never Plain text mode, lines never wrapped) with a chosen From address and that address's signature. Does not send it.",
       inputSchema: {
         type: "object",
         properties: {
           account: { type: "string", description: "Email address to create the draft in. Required." },
           to: { type: "string", description: "Recipient email address(es), comma-separated." },
           subject: { type: "string", description: "Subject line." },
-          body: { type: "string", description: "Plain-text message body." },
+          body: {
+            type: "string",
+            description:
+              "Message text. Write each paragraph as one line, never hard-wrapped; blank line between paragraphs. Sent as formatted HTML with full-width lines.",
+          },
+          html: { type: "string", description: "Optional HTML body instead of body." },
+          from: {
+            type: "string",
+            description: "Send-as address to send from, e.g. varun@chitly.co.uk. Must be on the account's send-as list. Omit for the account's default.",
+          },
+          signature: {
+            type: "boolean",
+            description: "Add the From address's saved Gmail signature (default true). Don't type a signature in the body as well.",
+          },
           cc: { type: "string", description: "Cc email address(es), comma-separated." },
           bcc: { type: "string", description: "Bcc email address(es), comma-separated." },
           threadId: {
@@ -369,7 +422,42 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: "Gmail thread ID to attach this draft to as a reply. Omit for a new thread.",
           },
         },
-        required: ["account", "to", "subject", "body"],
+        required: ["account", "to", "subject"],
+      },
+    },
+    {
+      name: "update_draft",
+      description:
+        "Replace the content of an existing Gmail draft in place, with the same options as create_draft. Does not send it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          draftId: { type: "string", description: "The draft to replace (from create_draft or list_drafts)." },
+          account: { type: "string", description: "Email address that owns the draft. Required." },
+          to: { type: "string", description: "Recipient email address(es), comma-separated." },
+          subject: { type: "string", description: "Subject line." },
+          body: {
+            type: "string",
+            description:
+              "Message text. Write each paragraph as one line, never hard-wrapped; blank line between paragraphs. Sent as formatted HTML with full-width lines.",
+          },
+          html: { type: "string", description: "Optional HTML body instead of body." },
+          from: {
+            type: "string",
+            description: "Send-as address to send from, e.g. varun@chitly.co.uk. Must be on the account's send-as list. Omit for the account's default.",
+          },
+          signature: {
+            type: "boolean",
+            description: "Add the From address's saved Gmail signature (default true). Don't type a signature in the body as well.",
+          },
+          cc: { type: "string", description: "Cc email address(es), comma-separated." },
+          bcc: { type: "string", description: "Bcc email address(es), comma-separated." },
+          threadId: {
+            type: "string",
+            description: "Gmail thread ID of the reply. Pass it again when updating a reply, or the draft leaves its thread.",
+          },
+        },
+        required: ["account", "draftId", "to", "subject"],
       },
     },
     {
@@ -429,16 +517,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       result = await listLabels(args!.account as string | undefined);
     } else if (name === "list_accounts") {
       result = { accounts: listAccounts() };
-    } else if (name === "create_draft") {
-      result = await createDraft(
-        args!.account as string,
-        args!.to as string,
-        args!.subject as string,
-        args!.body as string,
-        args!.cc as string | undefined,
-        args!.bcc as string | undefined,
-        args!.threadId as string | undefined
-      );
+    } else if (name === "create_draft" || name === "update_draft") {
+      const d: DraftInput = {
+        to: args!.to as string,
+        subject: args!.subject as string,
+        body: args!.body as string | undefined,
+        html: args!.html as string | undefined,
+        from: args!.from as string | undefined,
+        signature: args!.signature as boolean | undefined,
+        cc: args!.cc as string | undefined,
+        bcc: args!.bcc as string | undefined,
+        threadId: args!.threadId as string | undefined,
+      };
+      result =
+        name === "create_draft"
+          ? await createDraft(args!.account as string, d)
+          : await updateDraft(args!.account as string, args!.draftId as string, d);
     } else if (name === "list_drafts") {
       result = await listDrafts(
         (args!.maxResults as number) ?? 50,

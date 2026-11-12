@@ -9,8 +9,8 @@ deleting it. Never describe uncommitted work here, `git status` covers that live
 
 ## What this is
 
-TypeScript, multi-account Gmail MCP server for Claude Code (stdio), 7 tools (`search_threads`,
-`get_message`, `list_labels`, `list_accounts`, `create_draft`, `list_drafts`, `get_draft`).
+TypeScript, multi-account Gmail MCP server for Claude Code (stdio), 8 tools (`search_threads`,
+`get_message`, `list_labels`, `list_accounts`, `create_draft`, `update_draft`, `list_drafts`, `get_draft`).
 `gmail.readonly` for reads, `gmail.compose` for drafts; never sends mail. Depended on by Hermes
 Agent (`mcp_servers.gmail` in its `config.yaml`) and my-EA's `finances` and `brainstorm` skills.
 Has its own GitHub remote, `main` branch, public at
