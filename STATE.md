@@ -12,8 +12,8 @@ deleting it. Never describe uncommitted work here, `git status` covers that live
 TypeScript, multi-account Gmail + Calendar MCP server for Claude Code (stdio), 10 tools
 (`search_threads`, `get_message`, `list_labels`, `list_accounts`, `create_draft`, `update_draft`,
 `list_drafts`, `get_draft`, `list_events`, `search_events`). `gmail.readonly` for Gmail reads,
-`gmail.compose` for drafts, `calendar.readonly` for calendar reads; never sends mail, never
-deletes a draft, and never creates, updates, or deletes a calendar event. Depended on by Hermes
+`gmail.compose` for drafts, `calendar.readonly` for calendar reads; the code never sends mail and never
+deletes a draft (but a `gmail.compose` token technically can send, so tokens are credentials), and never creates, updates, or deletes a calendar event. Depended on by Hermes
 Agent (`mcp_servers.gmail` in its `config.yaml`) and my-EA's `finances` and `brainstorm` skills.
 Has its own GitHub remote, `main` branch, public at `https://github.com/VarunDasharadhi/gmail-mcp`.
 
@@ -44,15 +44,16 @@ shapes, not against any live account or a real revoked token.
 
 Per the last real `HANDOFF.md` entry (2026-07-14, before an earlier task tombstoned that file):
 draft creation (`create_draft`/`list_drafts`/`get_draft`) shipped, all 4 accounts were
-re-authorized for the `gmail.compose` scope, and both commits were pushed to `origin/main`. Real
-cross-provider mail merge (Yahoo/Outlook/iCloud) was discussed but never started; no CI or
-automated tests exist.
+re-authorized for the `gmail.compose` scope, and the work was pushed to `origin/main`. Real
+cross-provider mail merge (Yahoo/Outlook/iCloud) was discussed but never started; there is no CI.
 
-Verification gate: `npm run build` (`tsc`), then `node --test dist/compose.test.js` (the compose
-tests from `main`). No `test` or `lint` script exists in package.json.
+Verification gate: `npm run build` (`tsc`), then `node --test dist/compose.test.js dist/security.test.js`
+(`src/compose.ts` mail building, and the pure helpers in `src/security.ts`: argument checks,
+account matching, OAuth state and grant checks, token file modes). No `test` or `lint` script exists
+in package.json.
 
 Security: `tokens/*.json` (4 real OAuth tokens) and `credentials.json` are gitignored and were
-confirmed, via a full `git log --all` history search across both commits, to have never been
-tracked on any branch. See AGENTS.md's Security section for the hard rules on these files.
+confirmed, via a full `git log --all` history search, to have never been tracked on any branch. See AGENTS.md's Security section for the hard rules on these files.
 
-Last verified: 2026-09-10
+Auth flow on a headless server: `npm run auth` starts a callback that listens on 127.0.0.1 only, so the
+consent URL must be opened in a browser on the same machine (for example the xrdp desktop). Or, from another computer, forward the port first with `ssh -L 9427:127.0.0.1:9427 <server>` and open the URL in a browser there.

@@ -22,13 +22,13 @@ unexpected happens: `~\.agents\PROTOCOL.md`.
 
 ## Stack and run commands
 
-TypeScript (ESM, `"type": "module"`), Node.js. `src/auth.ts` (one-off OAuth flow, authorizes an account and saves its token) and `src/index.ts` (the MCP server itself) compile to `dist/`. Dependencies: `@modelcontextprotocol/sdk`, `googleapis`.
+TypeScript (ESM, `"type": "module"`), Node.js. `src/auth.ts` (one-off OAuth flow, authorizes an account and saves its token), `src/index.ts` (the MCP server itself), `src/compose.ts` (builds the draft mail) and `src/security.ts` (pure checks used by both) compile to `dist/`. Dependencies: `@modelcontextprotocol/sdk`, `googleapis`.
 
-Commands: `npm install`, `npm run build` (`tsc`), `npm start` (`node dist/index.js`), `npm run auth -- <email>` (authorizes one account, opens a Google consent screen, saves the token to `tokens/<email>.json`).
+Commands: `npm install`, `npm run build` (`tsc`), `npm start` (`node dist/index.js`), `npm run auth -- <email>` (authorizes one account, opens a Google consent screen, saves the token to `tokens/<email>.json`). The callback listens on 127.0.0.1 only, so on a headless server open the consent URL in a browser on the same machine (for example the xrdp desktop). Or, from another computer, forward the port first with `ssh -L 9427:127.0.0.1:9427 <server>` and open the URL in a browser there. `auth` refuses to save a token unless the signed-in account matches the email and exactly the three scopes were granted.
 
 ## Verification gate
 
-`npm run build` (`tsc`) is the only real, codified `package.json` script that acts as a gate. No `test` or `lint` script exists; `auth` and `start` are runtime entry points, not verification steps. A change is done when `npm run build` compiles clean and `node --test dist/compose.test.js` passes.
+`npm run build` (`tsc`) is the only real, codified `package.json` script that acts as a gate. No `test` or `lint` script exists; `auth` and `start` are runtime entry points, not verification steps. A change is done when `npm run build` compiles clean and `node --test dist/compose.test.js dist/security.test.js` passes.
 
 This gate is non-negotiable for any harness or agent making code changes here, not just Claude
 Code. A change that has not run the gate clean is not done. Do not commit with `--no-verify`. If a
@@ -43,7 +43,7 @@ routing around it.
 
 Never commit, print, cat, or otherwise output the contents of `tokens/*.json` or `credentials.json`. Never paste their content into a prompt, a file, a commit message, or any other channel a model reads. If you need to inspect whether a token file exists or what accounts are authorized, check the filename only (`ls tokens/`), never its content. Before any commit, confirm `.gitignore` still excludes both `tokens/` and `credentials.json`, and that `git status` shows neither as staged.
 
-`gmail.compose` bundles send permission with draft management at the Gmail API/token level; there is no Gmail scope that grants drafts-only access without also authorizing send. Treat the token files in `tokens/` as more powerful than the tool surface (`create_draft`/`list_drafts`/`get_draft`) implies.
+`gmail.compose` bundles send permission with draft management at the Gmail API/token level; there is no Gmail scope that grants drafts-only access without also authorizing send. The code never sends, but a `gmail.compose` token technically can, so tokens are credentials. Treat the token files in `tokens/` as more powerful than the tool surface (`create_draft`, `update_draft`, `list_drafts`, `get_draft`) implies.
 
 ### Other boundaries
 

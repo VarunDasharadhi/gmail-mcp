@@ -113,6 +113,13 @@ export interface MimeParams {
 }
 
 export function buildMime(p: MimeParams): string {
+  // Header fields must be single strings: an array or object could smuggle a line break past the check below.
+  for (const k of ["from", "to", "cc", "bcc", "subject", "inReplyTo", "references"] as const) {
+    const v = (p as unknown as Record<string, unknown>)[k];
+    if (v !== undefined && typeof v !== "string") {
+      throw new Error(`The ${k} field must be a single string.`);
+    }
+  }
   // A line break inside any header value would let a caller add headers (a hidden Bcc, say). Refuse it.
   for (const [k, v] of Object.entries(p)) {
     if (k !== "html" && k !== "text" && typeof v === "string" && /[\r\n]/.test(v)) {

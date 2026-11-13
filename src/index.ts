@@ -9,6 +9,8 @@ import { OAuth2Client } from "google-auth-library";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { AsyncLocalStorage } from "async_hooks";
+import { clampLimit, listAccountsIn, readTokenJson, resolveSingleTokenFile, resolveTokenFilesIn, validateDraftArgs } from "./security.js";
 import { buildMime, composeHtml, htmlToText, pickReplyHeaders, pickSender, textToHtml, toRaw } from "./compose.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -24,29 +26,26 @@ function loadOAuthBase(): { client_id: string; client_secret: string; redirect_u
 function getClient(tokenFile: string): OAuth2Client {
   const creds = loadOAuthBase();
   const client = new google.auth.OAuth2(creds.client_id, creds.client_secret, creds.redirect_uris[0]);
-  client.setCredentials(JSON.parse(readFileSync(tokenFile, "utf8")));
+  client.setCredentials(readTokenJson(tokenFile, accountFromPath(tokenFile)) as any);
   return client;
 }
 
 function listAccounts(): string[] {
-  if (!existsSync(TOKENS_DIR)) return [];
-  return readdirSync(TOKENS_DIR)
-    .filter((f) => f.endsWith(".json"))
-    .map((f) => f.replace(".json", ""));
+  return listAccountsIn(TOKENS_DIR);
 }
 
+// Skipped accounts are collected per tool call (async-local), never in a shared module variable.
+const callContext = new AsyncLocalStorage<{ skipped: string[] }>();
+
 function resolveTokenFiles(account?: string): string[] {
-  const accounts = listAccounts();
-  if (!account || account === "all") {
-    return accounts.map((a) => join(TOKENS_DIR, `${a}.json`));
-  }
-  const match = accounts.find((a) => a === account || a.startsWith(account));
-  if (!match) throw new Error(`No token for account "${account}". Run: npm run auth -- ${account}`);
-  return [join(TOKENS_DIR, `${match}.json`)];
+  const { files, skipped } = resolveTokenFilesIn(TOKENS_DIR, account);
+  const store = callContext.getStore();
+  if (store) for (const a of skipped) if (!store.skipped.includes(a)) store.skipped.push(a);
+  return files;
 }
 
 function accountFromPath(tokenFile: string): string {
-  return tokenFile.split(/[/\\]/).pop()!.replace(".json", "");
+  return tokenFile.split(/[/\\]/).pop()!.replace(/\.json$/, "");
 }
 
 function extractHeader(headers: any[], name: string): string {
@@ -224,10 +223,7 @@ async function buildDraftRaw(gmail: any, d: DraftInput): Promise<string> {
 }
 
 function gmailFor(account: string) {
-  if (!account || account === "all") {
-    throw new Error("account is required for drafts - pick one from list_accounts");
-  }
-  const tokenFile = resolveTokenFiles(account)[0];
+  const tokenFile = resolveSingleTokenFile(TOKENS_DIR, account);
   return { email: accountFromPath(tokenFile), gmail: google.gmail({ version: "v1", auth: getClient(tokenFile) }) };
 }
 
@@ -347,7 +343,7 @@ async function listEvents(params: {
   const calendarId = params.calendarId ?? "primary";
   const timeMin = params.timeMin ?? new Date().toISOString();
   const timeMax = params.timeMax ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-  const maxResults = params.maxResults ?? 50;
+  const maxResults = clampLimit(params.maxResults);
 
   const tokenFiles = resolveTokenFiles(params.account);
   const results: any[] = [];
@@ -384,7 +380,7 @@ async function searchEvents(params: {
   timeMax?: string;
   maxResults?: number;
 }) {
-  const maxResults = params.maxResults ?? 50;
+  const maxResults = clampLimit(params.maxResults);
   const tokenFiles = resolveTokenFiles(params.account);
   const results: any[] = [];
 
@@ -674,16 +670,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+server.setRequestHandler(CallToolRequestSchema, (request) =>
+  callContext.run({ skipped: [] }, () => handleCall(request))
+);
 
+async function handleCall(request: { params: { name: string; arguments?: Record<string, unknown> } }) {
+  const { name, arguments: args } = request.params;
+  const skippedAccounts = callContext.getStore()!.skipped;
   try {
     let result: unknown;
 
     if (name === "search_threads") {
       result = await searchThreads(
         args!.query as string,
-        (args!.maxResults as number) ?? 50,
+        clampLimit(args!.maxResults),
         args!.account as string | undefined
       );
     } else if (name === "get_message") {
@@ -696,24 +696,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     } else if (name === "list_accounts") {
       result = { accounts: listAccounts() };
     } else if (name === "create_draft" || name === "update_draft") {
+      const v = validateDraftArgs(args as Record<string, unknown> | undefined, name as "create_draft" | "update_draft");
       const d: DraftInput = {
-        to: args!.to as string,
-        subject: args!.subject as string,
-        body: args!.body as string | undefined,
-        html: args!.html as string | undefined,
-        from: args!.from as string | undefined,
-        signature: args!.signature as boolean | undefined,
-        cc: args!.cc as string | undefined,
-        bcc: args!.bcc as string | undefined,
-        threadId: args!.threadId as string | undefined,
+        to: v.to as string,
+        subject: v.subject as string,
+        body: v.body,
+        html: v.html,
+        from: v.from,
+        signature: v.signature,
+        cc: v.cc,
+        bcc: v.bcc,
+        threadId: v.threadId,
       };
       result =
         name === "create_draft"
-          ? await createDraft(args!.account as string, d)
-          : await updateDraft(args!.account as string, args!.draftId as string, d);
+          ? await createDraft(v.account as string, d)
+          : await updateDraft(v.account as string, v.draftId as string, d);
     } else if (name === "list_drafts") {
       result = await listDrafts(
-        (args!.maxResults as number) ?? 50,
+        clampLimit(args!.maxResults),
         args!.account as string | undefined
       );
     } else if (name === "get_draft") {
@@ -741,11 +742,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error(`Unknown tool: ${name}`);
     }
 
+    if (skippedAccounts.length) {
+      const note = (a: string) => ({
+        account: a,
+        error: `Skipped: the token file for this account is unreadable or corrupt. Run: npm run auth -- ${a}`,
+      });
+      if (Array.isArray(result)) result.push(...skippedAccounts.map(note));
+      else if (result && typeof result === "object") (result as any).skippedAccounts = skippedAccounts.map(note);
+    }
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   } catch (err: any) {
     return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
   }
-});
+}
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
