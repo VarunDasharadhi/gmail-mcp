@@ -6,7 +6,7 @@ authoritative and self-contained; don't assume the reader has also seen `CLAUDE.
 
 ## What this is
 
-A multi-account Gmail MCP server for Claude Code, over stdio. Exposes 7 tools: `search_threads`, `get_message`, `list_labels`, `list_accounts`, `create_draft`, `list_drafts`, `get_draft`, across whichever Gmail accounts have an authorized token in `tokens/`. Read access uses the `gmail.readonly` scope, draft creation uses `gmail.compose`; the server code never calls a send endpoint and cannot edit or delete existing drafts.
+A multi-account Gmail MCP server for Claude Code, over stdio. Exposes 10 tools: `search_threads`, `get_message`, `list_labels`, `list_accounts`, `create_draft`, `update_draft`, `list_drafts`, `get_draft`, `list_events`, `search_events`, across whichever Gmail accounts have an authorized token in `tokens/`. Read access uses the `gmail.readonly` scope, draft creation uses `gmail.compose`, the two calendar tools use `calendar.readonly` (adding that scope means every account must consent again: `npm run auth -- <email>`); the server code never calls a send endpoint and never deletes drafts; `update_draft` replaces a draft's content in place. Drafts are always HTML (multipart/alternative, never wrapped), with a `from` checked against the account's send-as list and that address's Gmail signature.
 
 This is now load-bearing infrastructure, not a standalone tool: Hermes Agent's `config.yaml` (`~\AppData\Local\hermes\config.yaml`, under `mcp_servers.gmail`) launches this server directly (`node dist/index.js`) for Hermes's own email access, and my-EA's `finances` and `brainstorm` skills both depend on it for cross-account Gmail search. A broken build or a scope change here breaks those consumers too, not just this repo.
 
@@ -28,7 +28,7 @@ Commands: `npm install`, `npm run build` (`tsc`), `npm start` (`node dist/index.
 
 ## Verification gate
 
-`npm run build` (`tsc`) is the only real, codified `package.json` script that acts as a gate. No `test` or `lint` script exists; `auth` and `start` are runtime entry points, not verification steps. A change is done when `npm run build` compiles clean; there is no automated test suite to run beyond that.
+`npm run build` (`tsc`) is the only real, codified `package.json` script that acts as a gate. No `test` or `lint` script exists; `auth` and `start` are runtime entry points, not verification steps. A change is done when `npm run build` compiles clean and `node --test dist/compose.test.js` passes.
 
 This gate is non-negotiable for any harness or agent making code changes here, not just Claude
 Code. A change that has not run the gate clean is not done. Do not commit with `--no-verify`. If a

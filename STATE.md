@@ -9,18 +9,18 @@ deleting it. Never describe uncommitted work here, `git status` covers that live
 
 ## What this is
 
-TypeScript, multi-account Gmail + Calendar MCP server for Claude Code (stdio), 9 tools
-(`search_threads`, `get_message`, `list_labels`, `list_accounts`, `create_draft`, `list_drafts`,
-`get_draft`, `list_events`, `search_events`). `gmail.readonly` for Gmail reads, `gmail.compose`
-for drafts, `calendar.readonly` for calendar reads; never sends mail and never creates, updates,
-or deletes a calendar event. Depended on by Hermes Agent (`mcp_servers.gmail` in its
-`config.yaml`) and my-EA's `finances` and `brainstorm` skills. Has its own GitHub remote, `main`
-branch, public at `https://github.com/VarunDasharadhi/gmail-mcp`.
+TypeScript, multi-account Gmail + Calendar MCP server for Claude Code (stdio), 10 tools
+(`search_threads`, `get_message`, `list_labels`, `list_accounts`, `create_draft`, `update_draft`,
+`list_drafts`, `get_draft`, `list_events`, `search_events`). `gmail.readonly` for Gmail reads,
+`gmail.compose` for drafts, `calendar.readonly` for calendar reads; never sends mail, never
+deletes a draft, and never creates, updates, or deletes a calendar event. Depended on by Hermes
+Agent (`mcp_servers.gmail` in its `config.yaml`) and my-EA's `finances` and `brainstorm` skills.
+Has its own GitHub remote, `main` branch, public at `https://github.com/VarunDasharadhi/gmail-mcp`.
 
 ## Where the code stands
 
-`main` is at `8c1d277` ("chore: add agent contract files"); this task's work is on
-`feat/calendar-readonly`, cut from it, not merged. Read-only calendar support
+`feat/calendar-readonly` now carries `main` (at `f91f292`, HTML drafts) merged in, on top of the
+calendar work; merging the branch back into `main` waits for Varun. Read-only calendar support
 (`list_events`/`search_events`) was added on top of the existing per-account OAuth2 client
 pattern (`getClient`), reusing it for `google.calendar({version: "v3", auth})` rather than
 duplicating the OAuth setup. `SCOPES` in `src/auth.ts` gained
@@ -48,8 +48,8 @@ re-authorized for the `gmail.compose` scope, and both commits were pushed to `or
 cross-provider mail merge (Yahoo/Outlook/iCloud) was discussed but never started; no CI or
 automated tests exist.
 
-Verification gate: `npm run build` (`tsc`) is the only real, codified script. No `test` or `lint`
-script exists.
+Verification gate: `npm run build` (`tsc`), then `node --test dist/compose.test.js` (the compose
+tests from `main`). No `test` or `lint` script exists in package.json.
 
 Security: `tokens/*.json` (4 real OAuth tokens) and `credentials.json` are gitignored and were
 confirmed, via a full `git log --all` history search across both commits, to have never been

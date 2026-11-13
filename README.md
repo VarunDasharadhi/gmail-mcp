@@ -10,13 +10,14 @@ A multi-account Gmail [MCP](https://modelcontextprotocol.io) server for Claude C
 | `get_message` | Fetch the full body and headers of a message by ID. |
 | `list_labels` | List Gmail labels for one or all connected accounts. |
 | `list_accounts` | List all Gmail accounts that currently have an authorized token saved. |
-| `create_draft` | Create a new draft (to, subject, body, optional cc/bcc/threadId/from) in a specific account. Never sends it. |
+| `create_draft` | Create a new draft (to, subject, body or html, optional from/signature/cc/bcc/threadId) in a specific account. Always HTML with an unwrapped plain-text copy, so Gmail never cuts lines; `from` must be a send-as address, and its saved Gmail signature is added. Never sends it. |
+| `update_draft` | Replace an existing draft's content in place, same options as `create_draft`. Never sends it. |
 | `list_drafts` | List drafts for one or all connected accounts. |
 | `get_draft` | Fetch the full body and headers of a draft by ID. |
 | `list_events` | List calendar events (default: next 7 days) across one or all connected accounts, expanding recurring events. Returns id, summary, start, end, location, all-day flag, and attendee count per event. |
 | `search_events` | Search calendar events by free-text query across one or all connected accounts. Same output shape as `list_events`. |
 
-Scopes: `gmail.readonly` for all Gmail read operations, `gmail.compose` for draft creation, and `calendar.readonly` for calendar reads. This server cannot edit or delete existing drafts, cannot send mail, and cannot create, update, or delete calendar events, it is read-only on the calendar side.
+Scopes: `gmail.readonly` for all Gmail read operations, `gmail.compose` for draft creation and replacement, and `calendar.readonly` for calendar reads. This server cannot delete drafts, cannot send mail, and cannot create, update, or delete calendar events; it is read-only on the calendar side, and creating or updating a draft is as far as it goes on the Gmail side.
 
 Accounts authorized before calendar support was added need to re-consent (see step 3 below) before `list_events` or `search_events` will work for them; until then, both tools return a clear per-account error naming the exact `npm run auth -- <email>` command to fix it, instead of a bare 401.
 
@@ -35,7 +36,7 @@ npm install
 3. Create an **OAuth client ID** of type **Desktop app**.
 4. Download the credentials and save them as `credentials.json` in the project root.
 
-`credentials.json` and everything under `tokens/` are gitignored — never commit them.
+`credentials.json` and everything under `tokens/` are gitignored; never commit them.
 
 ### 3. Authorize one or more Gmail accounts
 
