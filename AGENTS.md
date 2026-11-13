@@ -6,7 +6,7 @@ authoritative and self-contained; don't assume the reader has also seen `CLAUDE.
 
 ## What this is
 
-A multi-account Gmail MCP server for Claude Code, over stdio. Exposes 8 tools: `search_threads`, `get_message`, `list_labels`, `list_accounts`, `create_draft`, `update_draft`, `list_drafts`, `get_draft`, across whichever Gmail accounts have an authorized token in `tokens/`. Read access uses the `gmail.readonly` scope, draft creation uses `gmail.compose`; the server code never calls a send endpoint and never deletes drafts; `update_draft` replaces a draft's content in place. Drafts are always HTML (multipart/alternative, never wrapped), with a `from` checked against the account's send-as list and that address's Gmail signature.
+A multi-account Gmail MCP server for Claude Code, over stdio. Exposes 10 tools: `search_threads`, `get_message`, `list_labels`, `list_accounts`, `create_draft`, `update_draft`, `list_drafts`, `get_draft`, `list_events`, `search_events`, across whichever Gmail accounts have an authorized token in `tokens/`. Read access uses the `gmail.readonly` scope, draft creation uses `gmail.compose`, the two calendar tools use `calendar.readonly` (adding that scope means every account must consent again: `npm run auth -- <email>`); the server code never calls a send endpoint and never deletes drafts; `update_draft` replaces a draft's content in place. Drafts are always HTML (multipart/alternative, never wrapped), with a `from` checked against the account's send-as list and that address's Gmail signature.
 
 This is now load-bearing infrastructure, not a standalone tool: Hermes Agent's `config.yaml` (`~\AppData\Local\hermes\config.yaml`, under `mcp_servers.gmail`) launches this server directly (`node dist/index.js`) for Hermes's own email access, and my-EA's `finances` and `brainstorm` skills both depend on it for cross-account Gmail search. A broken build or a scope change here breaks those consumers too, not just this repo.
 
@@ -22,13 +22,13 @@ unexpected happens: `~\.agents\PROTOCOL.md`.
 
 ## Stack and run commands
 
-TypeScript (ESM, `"type": "module"`), Node.js. `src/auth.ts` (one-off OAuth flow, authorizes an account and saves its token) and `src/index.ts` (the MCP server itself) compile to `dist/`. Dependencies: `@modelcontextprotocol/sdk`, `googleapis`.
+TypeScript (ESM, `"type": "module"`), Node.js. `src/auth.ts` (one-off OAuth flow, authorizes an account and saves its token), `src/index.ts` (the MCP server itself), `src/compose.ts` (builds the draft mail) and `src/security.ts` (pure checks used by both) compile to `dist/`. Dependencies: `@modelcontextprotocol/sdk`, `googleapis`.
 
-Commands: `npm install`, `npm run build` (`tsc`), `npm start` (`node dist/index.js`), `npm run auth -- <email>` (authorizes one account, opens a Google consent screen, saves the token to `tokens/<email>.json`).
+Commands: `npm install`, `npm run build` (`tsc`), `npm start` (`node dist/index.js`), `npm run auth -- <email>` (authorizes one account, opens a Google consent screen, saves the token to `tokens/<email>.json`). The callback listens on 127.0.0.1 only, so on a headless server open the consent URL in a browser on the same machine (for example the xrdp desktop). Or, from another computer, forward the port first with `ssh -L 9427:127.0.0.1:9427 <server>` and open the URL in a browser there. `auth` refuses to save a token unless the signed-in account matches the email and exactly the three scopes were granted.
 
 ## Verification gate
 
-`npm run build` (`tsc`) is the only real, codified `package.json` script that acts as a gate. No `test` or `lint` script exists; `auth` and `start` are runtime entry points, not verification steps. A change is done when `npm run build` compiles clean; there is no automated test suite to run beyond that.
+`npm run build` (`tsc`) is the only real, codified `package.json` script that acts as a gate. No `test` or `lint` script exists; `auth` and `start` are runtime entry points, not verification steps. A change is done when `npm run build` compiles clean and `node --test dist/compose.test.js dist/security.test.js` passes.
 
 This gate is non-negotiable for any harness or agent making code changes here, not just Claude
 Code. A change that has not run the gate clean is not done. Do not commit with `--no-verify`. If a
@@ -37,13 +37,13 @@ routing around it.
 
 ## Repo boundaries
 
-### Security: OAuth tokens for 4 real Gmail accounts
+### Security: OAuth tokens for your configured accounts
 
-`tokens/*.json` holds real, live OAuth tokens for 4 real Gmail accounts (`account-1@example.com`, `account-2@example.com`, `account-3@example.com`, `account-4@example.com`). `credentials.json` at repo root holds the OAuth client credentials. Both are gitignored; neither has ever been tracked in this repo's git history, on any branch, confirmed by a full history search.
+`tokens/*.json` holds the OAuth tokens for whichever Gmail accounts you have authorized locally (the owner's own list lives in the gitignored `docs/accounts.local.md`). `credentials.json` at repo root holds the OAuth client credentials. Both are gitignored; neither has ever been tracked in this repo's git history, on any branch, confirmed by a full history search.
 
 Never commit, print, cat, or otherwise output the contents of `tokens/*.json` or `credentials.json`. Never paste their content into a prompt, a file, a commit message, or any other channel a model reads. If you need to inspect whether a token file exists or what accounts are authorized, check the filename only (`ls tokens/`), never its content. Before any commit, confirm `.gitignore` still excludes both `tokens/` and `credentials.json`, and that `git status` shows neither as staged.
 
-`gmail.compose` bundles send permission with draft management at the Gmail API/token level; there is no Gmail scope that grants drafts-only access without also authorizing send. Treat the token files in `tokens/` as more powerful than the tool surface (`create_draft`/`list_drafts`/`get_draft`) implies.
+`gmail.compose` bundles send permission with draft management at the Gmail API/token level; there is no Gmail scope that grants drafts-only access without also authorizing send. The code never sends, but a `gmail.compose` token technically can, so tokens are credentials. Treat the token files in `tokens/` as more powerful than the tool surface (`create_draft`, `update_draft`, `list_drafts`, `get_draft`) implies.
 
 ### Other boundaries
 

@@ -9,6 +9,8 @@ import { OAuth2Client } from "google-auth-library";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { AsyncLocalStorage } from "async_hooks";
+import { clampLimit, listAccountsIn, readTokenJson, resolveSingleTokenFile, resolveTokenFilesIn, validateDraftArgs } from "./security.js";
 import { buildMime, composeHtml, htmlToText, pickReplyHeaders, pickSender, textToHtml, toRaw } from "./compose.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -24,29 +26,26 @@ function loadOAuthBase(): { client_id: string; client_secret: string; redirect_u
 function getClient(tokenFile: string): OAuth2Client {
   const creds = loadOAuthBase();
   const client = new google.auth.OAuth2(creds.client_id, creds.client_secret, creds.redirect_uris[0]);
-  client.setCredentials(JSON.parse(readFileSync(tokenFile, "utf8")));
+  client.setCredentials(readTokenJson(tokenFile, accountFromPath(tokenFile)) as any);
   return client;
 }
 
 function listAccounts(): string[] {
-  if (!existsSync(TOKENS_DIR)) return [];
-  return readdirSync(TOKENS_DIR)
-    .filter((f) => f.endsWith(".json"))
-    .map((f) => f.replace(".json", ""));
+  return listAccountsIn(TOKENS_DIR);
 }
 
+// Skipped accounts are collected per tool call (async-local), never in a shared module variable.
+const callContext = new AsyncLocalStorage<{ skipped: string[] }>();
+
 function resolveTokenFiles(account?: string): string[] {
-  const accounts = listAccounts();
-  if (!account || account === "all") {
-    return accounts.map((a) => join(TOKENS_DIR, `${a}.json`));
-  }
-  const match = accounts.find((a) => a === account || a.startsWith(account));
-  if (!match) throw new Error(`No token for account "${account}". Run: npm run auth -- ${account}`);
-  return [join(TOKENS_DIR, `${match}.json`)];
+  const { files, skipped } = resolveTokenFilesIn(TOKENS_DIR, account);
+  const store = callContext.getStore();
+  if (store) for (const a of skipped) if (!store.skipped.includes(a)) store.skipped.push(a);
+  return files;
 }
 
 function accountFromPath(tokenFile: string): string {
-  return tokenFile.split(/[/\\]/).pop()!.replace(".json", "");
+  return tokenFile.split(/[/\\]/).pop()!.replace(/\.json$/, "");
 }
 
 function extractHeader(headers: any[], name: string): string {
@@ -224,10 +223,7 @@ async function buildDraftRaw(gmail: any, d: DraftInput): Promise<string> {
 }
 
 function gmailFor(account: string) {
-  if (!account || account === "all") {
-    throw new Error("account is required for drafts — pick one from list_accounts");
-  }
-  const tokenFile = resolveTokenFiles(account)[0];
+  const tokenFile = resolveSingleTokenFile(TOKENS_DIR, account);
   return { email: accountFromPath(tokenFile), gmail: google.gmail({ version: "v1", auth: getClient(tokenFile) }) };
 }
 
@@ -294,6 +290,120 @@ async function listDrafts(maxResults: number, account?: string) {
       results.push({ account: email, drafts: detailed });
     } catch (err: any) {
       results.push({ account: email, error: err.message });
+    }
+  }
+
+  return results;
+}
+
+function calendarErrorMessage(err: any, email: string): string {
+  const status = err?.code ?? err?.response?.status;
+  const reason =
+    err?.errors?.[0]?.reason ?? err?.response?.data?.error?.errors?.[0]?.reason;
+  const rawMessage = err?.message ?? String(err);
+
+  if (
+    status === 403 &&
+    (reason === "insufficientPermissions" || /insufficient/i.test(rawMessage))
+  ) {
+    return `${email}'s token does not have calendar access yet (missing calendar.readonly scope). Run: npm run auth -- ${email}`;
+  }
+  if (status === 401) {
+    return `${email}'s token is invalid or expired for calendar access. Run: npm run auth -- ${email} to re-authorize.`;
+  }
+  if (/invalid_grant/i.test(rawMessage)) {
+    return `${email}'s token is invalid or expired for calendar access. Run: npm run auth -- ${email} to re-authorize.`;
+  }
+  return rawMessage;
+}
+
+function formatEvent(event: any) {
+  const start = event.start?.dateTime ?? event.start?.date ?? "";
+  const end = event.end?.dateTime ?? event.end?.date ?? "";
+  const allDay = Boolean(event.start?.date) && !event.start?.dateTime;
+
+  return {
+    id: event.id,
+    summary: event.summary ?? "(no title)",
+    start,
+    end,
+    location: event.location ?? "",
+    allDay,
+    attendeeCount: (event.attendees ?? []).length,
+  };
+}
+
+async function listEvents(params: {
+  account?: string;
+  timeMin?: string;
+  timeMax?: string;
+  maxResults?: number;
+  calendarId?: string;
+}) {
+  const calendarId = params.calendarId ?? "primary";
+  const timeMin = params.timeMin ?? new Date().toISOString();
+  const timeMax = params.timeMax ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const maxResults = clampLimit(params.maxResults);
+
+  const tokenFiles = resolveTokenFiles(params.account);
+  const results: any[] = [];
+
+  for (const tokenFile of tokenFiles) {
+    const email = accountFromPath(tokenFile);
+    const calendar = google.calendar({ version: "v3", auth: getClient(tokenFile) });
+
+    try {
+      const res = await calendar.events.list({
+        calendarId,
+        timeMin,
+        timeMax,
+        maxResults,
+        singleEvents: true,
+        orderBy: "startTime",
+      });
+      results.push({
+        account: email,
+        events: (res.data.items ?? []).map(formatEvent),
+      });
+    } catch (err: any) {
+      results.push({ account: email, error: calendarErrorMessage(err, email) });
+    }
+  }
+
+  return results;
+}
+
+async function searchEvents(params: {
+  query: string;
+  account?: string;
+  timeMin?: string;
+  timeMax?: string;
+  maxResults?: number;
+}) {
+  const maxResults = clampLimit(params.maxResults);
+  const tokenFiles = resolveTokenFiles(params.account);
+  const results: any[] = [];
+
+  for (const tokenFile of tokenFiles) {
+    const email = accountFromPath(tokenFile);
+    const calendar = google.calendar({ version: "v3", auth: getClient(tokenFile) });
+
+    try {
+      const res = await calendar.events.list({
+        calendarId: "primary",
+        q: params.query,
+        timeMin: params.timeMin,
+        timeMax: params.timeMax,
+        maxResults,
+        singleEvents: true,
+        orderBy: "startTime",
+      });
+      results.push({
+        account: email,
+        events: (res.data.items ?? []).map(formatEvent),
+      });
+    } catch (err: any) {
+      results.push({ account: email, error: calendarErrorMessage(err, email) });
     }
   }
 
@@ -493,19 +603,87 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["draftId"],
       },
     },
+    {
+      name: "list_events",
+      description:
+        "List calendar events across one or all connected accounts, ordered by start time. Expands recurring events into individual instances. Defaults to the next 7 days.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          account: {
+            type: "string",
+            description: "Email address to list events for, or 'all' for all connected accounts. Omit for all.",
+          },
+          timeMin: {
+            type: "string",
+            description: "ISO 8601 start of the time range. Defaults to now.",
+          },
+          timeMax: {
+            type: "string",
+            description: "ISO 8601 end of the time range. Defaults to 7 days from now.",
+          },
+          maxResults: {
+            type: "number",
+            description: "Max events per account (default 50, max 100)",
+            default: 50,
+          },
+          calendarId: {
+            type: "string",
+            description: "Calendar ID to query. Defaults to 'primary'.",
+            default: "primary",
+          },
+        },
+      },
+    },
+    {
+      name: "search_events",
+      description:
+        "Search calendar events by text query across one or all connected accounts, ordered by start time. Expands recurring events into individual instances.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Free-text search query, matched against event summary, description, location, and attendees.",
+          },
+          account: {
+            type: "string",
+            description: "Email address to search, or 'all' for all connected accounts. Omit for all.",
+          },
+          timeMin: {
+            type: "string",
+            description: "ISO 8601 start of the time range. Omit for no lower bound.",
+          },
+          timeMax: {
+            type: "string",
+            description: "ISO 8601 end of the time range. Omit for no upper bound.",
+          },
+          maxResults: {
+            type: "number",
+            description: "Max events per account (default 50, max 100)",
+            default: 50,
+          },
+        },
+        required: ["query"],
+      },
+    },
   ],
 }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+server.setRequestHandler(CallToolRequestSchema, (request) =>
+  callContext.run({ skipped: [] }, () => handleCall(request))
+);
 
+async function handleCall(request: { params: { name: string; arguments?: Record<string, unknown> } }) {
+  const { name, arguments: args } = request.params;
+  const skippedAccounts = callContext.getStore()!.skipped;
   try {
     let result: unknown;
 
     if (name === "search_threads") {
       result = await searchThreads(
         args!.query as string,
-        (args!.maxResults as number) ?? 50,
+        clampLimit(args!.maxResults),
         args!.account as string | undefined
       );
     } else if (name === "get_message") {
@@ -518,24 +696,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     } else if (name === "list_accounts") {
       result = { accounts: listAccounts() };
     } else if (name === "create_draft" || name === "update_draft") {
+      const v = validateDraftArgs(args as Record<string, unknown> | undefined, name as "create_draft" | "update_draft");
       const d: DraftInput = {
-        to: args!.to as string,
-        subject: args!.subject as string,
-        body: args!.body as string | undefined,
-        html: args!.html as string | undefined,
-        from: args!.from as string | undefined,
-        signature: args!.signature as boolean | undefined,
-        cc: args!.cc as string | undefined,
-        bcc: args!.bcc as string | undefined,
-        threadId: args!.threadId as string | undefined,
+        to: v.to as string,
+        subject: v.subject as string,
+        body: v.body,
+        html: v.html,
+        from: v.from,
+        signature: v.signature,
+        cc: v.cc,
+        bcc: v.bcc,
+        threadId: v.threadId,
       };
       result =
         name === "create_draft"
-          ? await createDraft(args!.account as string, d)
-          : await updateDraft(args!.account as string, args!.draftId as string, d);
+          ? await createDraft(v.account as string, d)
+          : await updateDraft(v.account as string, v.draftId as string, d);
     } else if (name === "list_drafts") {
       result = await listDrafts(
-        (args!.maxResults as number) ?? 50,
+        clampLimit(args!.maxResults),
         args!.account as string | undefined
       );
     } else if (name === "get_draft") {
@@ -543,15 +722,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         args!.draftId as string,
         args!.account as string | undefined
       );
+    } else if (name === "list_events") {
+      result = await listEvents({
+        account: args!.account as string | undefined,
+        timeMin: args!.timeMin as string | undefined,
+        timeMax: args!.timeMax as string | undefined,
+        maxResults: args!.maxResults as number | undefined,
+        calendarId: args!.calendarId as string | undefined,
+      });
+    } else if (name === "search_events") {
+      result = await searchEvents({
+        query: args!.query as string,
+        account: args!.account as string | undefined,
+        timeMin: args!.timeMin as string | undefined,
+        timeMax: args!.timeMax as string | undefined,
+        maxResults: args!.maxResults as number | undefined,
+      });
     } else {
       throw new Error(`Unknown tool: ${name}`);
     }
 
+    if (skippedAccounts.length) {
+      const note = (a: string) => ({
+        account: a,
+        error: `Skipped: the token file for this account is unreadable or corrupt. Run: npm run auth -- ${a}`,
+      });
+      if (Array.isArray(result)) result.push(...skippedAccounts.map(note));
+      else if (result && typeof result === "object") (result as any).skippedAccounts = skippedAccounts.map(note);
+    }
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   } catch (err: any) {
     return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
   }
-});
+}
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
